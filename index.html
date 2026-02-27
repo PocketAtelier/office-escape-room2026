@@ -1,0 +1,1268 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Escape Room</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+background: #111;
+display: flex;
+justify-content: center;
+align-items: center;
+width: 100vw;
+height: 100vh;
+overflow: hidden;
+}
+
+#game-wrapper {
+position: absolute;
+width: 1024px;
+height: 1024px;
+transform-origin: top left;
+}
+
+#game-container {
+position: relative;
+width: 1024px;
+height: 1024px;
+overflow: hidden;
+user-select: none;
+}
+
+/* ── Scene Image ── */
+#scene-image {
+position: absolute;
+top: 0; left: 0;
+width: 1024px;
+height: 1024px;
+display: block;
+image-rendering: crisp-edges;
+}
+
+/* ── Language Switcher ── */
+#lang-switcher {
+position: absolute;
+top: 16px;
+right: 16px;
+z-index: 200;
+display: flex;
+gap: 6px;
+align-items: center;
+}
+
+#debug-btn {
+background: rgba(255, 220, 0, 0.85);
+border: 2px solid #aa8800;
+border-radius: 6px;
+padding: 8px 14px;
+font-size: 18px;
+font-weight: 700;
+font-family: ‘Helvetica Neue’, Arial, sans-serif;
+cursor: pointer;
+color: #333;
+}
+
+/* Debug hotspot styles — only visible when debug mode is on */
+#game-container.debug-on .hotspot[data-type=“red”] {
+background: rgba(255, 60, 60, 0.35) !important;
+border: 2px solid red !important;
+}
+#game-container.debug-on .hotspot[data-type=“blue”] {
+background: rgba(60, 100, 255, 0.35) !important;
+border: 2px solid blue !important;
+}
+#game-container.debug-on .hotspot[data-type=“keypad”] {
+background: rgba(255, 165, 0, 0.35) !important;
+border: 2px solid orange !important;
+}
+
+.lang-btn {
+background: rgba(255, 255, 255, 0.82);
+border: 2px solid #888;
+border-radius: 6px;
+padding: 8px 18px;
+font-size: 20px;
+font-weight: 700;
+font-family: ‘Helvetica Neue’, Arial, sans-serif;
+cursor: pointer;
+transition: background 0.15s, color 0.15s, border-color 0.15s;
+color: #333;
+}
+
+.lang-btn.active {
+background: #444;
+color: #fff;
+border-color: #444;
+}
+
+.lang-btn:hover:not(.active) {
+background: rgba(255,255,255,0.95);
+border-color: #555;
+}
+
+/* ── Dialog Text Overlay ── */
+/* Positioned to sit inside the dialog box area painted on the images */
+/* Dialog box appears at the top of the image: approx y:18 to y:140, x:18 to x:870 */
+#dialog-overlay {
+position: absolute;
+top: 18px;
+left: 18px;
+right: 210px;
+height: 122px;
+z-index: 150;
+display: flex;
+align-items: center;
+padding: 8px 20px;
+pointer-events: none;
+}
+
+#dialog-text {
+font-family: ‘Hiragino Kaku Gothic Pro’, ‘Meiryo’, ‘Helvetica Neue’, Arial, sans-serif;
+font-size: 25px;
+line-height: 1.55;
+color: #2c1a0e;
+font-weight: 500;
+text-shadow: none;
+white-space: pre-wrap;
+word-break: break-word;
+}
+
+/* ── Hotspot Divs ── */
+.hotspot {
+position: absolute;
+cursor: pointer;
+-webkit-tap-highlight-color: transparent;
+outline: none;
+/* Debug mode: uncomment below to see hotspot boundaries */
+/* background: rgba(255, 100, 0, 0.15); */
+/* border: 1px dashed rgba(255,100,0,0.4); */
+}
+
+/* ── Inventory Item Overlays ── */
+#inventory-overlay {
+position: absolute;
+top: 0; left: 0;
+width: 1024px;
+height: 1024px;
+pointer-events: none;
+z-index: 120;
+}
+
+.inv-item {
+position: absolute;
+pointer-events: all;
+cursor: pointer;
+object-fit: contain;
+}
+
+/* ── Fade Overlay (for ending sequence) ── */
+#fade-overlay {
+position: absolute;
+top: 0; left: 0;
+width: 1024px;
+height: 1024px;
+background: white;
+opacity: 0;
+pointer-events: none;
+z-index: 300;
+transition: opacity 5s ease-in-out;
+}
+
+#fade-overlay.fade-in {
+opacity: 1;
+pointer-events: all;
+}
+</style>
+
+</head>
+<body>
+
+<div id="game-wrapper">
+  <div id="game-container">
+
+```
+<!-- Scene Image -->
+<img id="scene-image" src="" alt="scene" draggable="false" />
+
+<!-- Language Switcher (always on top) -->
+<div id="lang-switcher">
+  <button class="lang-btn active" id="btn-en" onclick="setLang('EN')">ENG</button>
+  <button class="lang-btn"        id="btn-jp" onclick="setLang('JP')">日本語</button>
+</div>
+
+<!-- Dialog Text Overlay -->
+<div id="dialog-overlay">
+  <span id="dialog-text"></span>
+</div>
+
+<!-- Hotspots are injected here dynamically -->
+<div id="hotspot-container"></div>
+
+<!-- Inventory item overlays (R3 lever parts) -->
+<div id="inventory-overlay"></div>
+
+<!-- Fade overlay for ending -->
+<div id="fade-overlay"></div>
+```
+
+  </div>
+</div>
+
+<script>
+// ============================================================
+//  GAME STATE
+// ============================================================
+const state = {
+  currentScene    : null,
+  lang            : 'EN',
+  visited         : {},   // { sceneName: true } — tracks first vs. repeat visits
+  hasKey          : false,
+  r3items         : { item1: false, item2: false, item3: false },
+  currentDialogKey: null, // stores the active dialog text object { EN, JP } for lang-switch re-render
+  keypadInput     : []    // tracks digits entered on R2 keypad (max 3)
+};
+
+// ============================================================
+//  SCENE DATA
+//  Structure per hotspot:
+//    type   : 'red'  → navigate to another scene
+//           : 'blue' → show dialog text
+//    action : function  (red hotspots)
+//    text   : { EN, JP } (blue hotspots)
+//    x, y, w, h : pixel coords on 1024×1024 canvas
+// ============================================================
+const scenes = {
+
+  // ────────────────────────────────────────────────────────
+  //  R1 – OFFICE MAIN  (no key in inventory)
+  // ────────────────────────────────────────────────────────
+  R1_Office_Main: {
+    image: 'R1_Office_Main.jpg',
+    onEnter: {
+      first:  { EN: "Ugh, what's this headache? Where am I?",
+                JP: "うぅ・・この頭痛はなんだ？ここはどこだ？" }
+      // No repeat text — player cannot return here once key is found
+    },
+    hotspots: [
+      // ① Red — Bookcase → navigate to bookcase (closed)
+      { id:'main_bookcase',  x:28,  y:183, w:292, h:365,
+        type:'red',  action: ()=> goTo('R1_Office_Bookcase_ClosedBook') },
+
+      // ② Blue — Door (locked)
+      { id:'main_door',      x:398, y:218, w:224, h:330,
+        type:'blue', text: { EN: "The door is locked. Maybe the key is somewhere in this room?",
+                              JP: "扉はロックされてるみたいだ。どっかに鍵があるのかな？" }},
+
+      // ③ Blue — Left cubicle
+      { id:'main_cube_l',    x:28,  y:548, w:352, h:282,
+        type:'blue', text: { EN: "An empty cubicle. Where is everyone?",
+                              JP: "誰も座っていない。みんなどこいった？" }},
+
+      // ④ Blue — Right cubicle / clean desk
+      { id:'main_cube_r',    x:620, y:548, w:380, h:282,
+        type:'blue', text: { EN: "The desk looks really clean. Was this guy really working?",
+                              JP: "本当に働いてたと思えないくらい、この人の机はきれいだ。" }},
+
+      // ⑤ Blue — Nameplate "Stitch"
+      { id:'main_nameplate', x:660, y:465, w:195, h:120,
+        type:'blue', text: { EN: 'The nameplate on the desk reads, "Stitch"',
+                              JP: "机に置かれた名札には、「スティッチ」と書かれている。" }},
+
+      // ⑥ Blue — Ceiling / lights
+      { id:'main_ceiling',   x:0,   y:155, w:1024, h:60,
+        type:'blue', text: { EN: "Good to know they have electricity.",
+                              JP: "電気が通っているのは安心だな。" }}
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R1 – BOOKCASE  (closed / handbook visible)
+  // ────────────────────────────────────────────────────────
+  R1_Office_Bookcase_ClosedBook: {
+    image: 'R1_Office_Bookcase_ClosedBook.jpg',
+    onEnter: {
+      first:  { EN: 'You walk up to the bookcase. A book titled "Employeee Handbook" catches your eye.',
+                JP: "本棚に近づいてみた。「エンプロイイイ・ハンドブック」と書かれた本が目に入る。" },
+      repeat: { EN: "You walk back to the center of the room.",
+                JP: "部屋の中央に戻った。" }
+    },
+    hotspots: [
+      // ① Red — Employee Handbook → open it
+      { id:'closed_handbook', x:390, y:265, w:232, h:275,
+        type:'red', action: ()=> goTo('R1_Office_Bookcase_OpenedBook') },
+
+      // ② Red — Bottom shelf area → go back to main (no key yet)
+      { id:'closed_back',     x:0,   y:720, w:1024, h:102,
+        type:'red', action: ()=> goTo('R1_Office_Main') },
+
+      // ③ Blue — Left shelf books (plastic)
+      { id:'closed_shelf_l',  x:25,  y:265, w:355, h:275,
+        type:'blue', text: { EN: "There's a bunch of books here about employee benefits, but all the books seem to be made of plastic.",
+                              JP: "会社の福利厚生についての本が並んでいるが、全部プラスチックで作られた偽物のようだ。" }},
+
+      // ④ Blue — Right shelf books (CEO-authored)
+      { id:'closed_shelf_r',  x:632, y:265, w:358, h:275,
+        type:'blue', text: { EN: "The books are all written by the CEO, but seems no one has touched them even once.",
+                              JP: "並んでいる本は全て作者が社長だが、一度も読まれた形跡が見つからない。" }}
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R1 – BOOKCASE  (book opened — key falls out)
+  // ────────────────────────────────────────────────────────
+  R1_Office_Bookcase_OpenedBook: {
+    image: 'R1_Office_Bookcase_OpenedBook.jpg',
+    onEnter: {
+      first:  { EN: "As you touch the book, a key falls out from the hidden compartment.",
+                JP: "お？本に触れた瞬間、中の隠し穴から鍵が落ちてきた。" },
+      repeat: { EN: "You walk up to the bookcase.",
+                JP: "本棚に近づいてみた。" }
+    },
+    onEnterCallback: ()=> { state.hasKey = true; },
+    hotspots: [
+      // ① Blue — The opened book itself
+      { id:'opened_book',     x:390, y:270, w:200, h:265,
+        type:'blue', text: { EN: "How unfortunate. I was actually thinking of reading that.",
+                              JP: "せっかく読もうと思ってたのに、読めなくなってしまったな。" }},
+
+      // ② Blue — Key shown in inventory slot 1 (bottom)
+      { id:'opened_key_inv',  x:332, y:900, w:160, h:94,
+        type:'blue', text: { EN: "Must be a key to something. Might take me a while to figure it out.",
+                              JP: "きっと何かを開けるための鍵だ。これは難しいな。" }},
+
+      // ③ Red — Bottom shelf (go back) → now transitions to MainWithKey
+      { id:'opened_back',     x:0,   y:720, w:1024, h:102,
+        type:'red', action: ()=> goTo('R1_Office_Main_WithKey') },
+
+      // ── Inherited from ClosedBook ──
+      // ③ (ClosedBook) Blue — Left shelf
+      { id:'opened_shelf_l',  x:25,  y:265, w:355, h:275,
+        type:'blue', text: { EN: "There's a bunch of books here about employee benefits, but the books seem to be made of plastic.",
+                              JP: "会社の福利厚生についての本が並んでいるが、全部プラスチックで作られた偽物のようだ。" }},
+
+      // ④ (ClosedBook) Blue — Right shelf
+      { id:'opened_shelf_r',  x:632, y:265, w:358, h:275,
+        type:'blue', text: { EN: "The books are all written by the CEO, but seems no one has touched them even once.",
+                              JP: "並んでいる本は全て作者が社長だが、一度も読まれた形跡が見つからない。" }}
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R1 – OFFICE MAIN  (key now in inventory — painted into image)
+  // ────────────────────────────────────────────────────────
+  R1_Office_Main_WithKey: {
+    image: 'R1_Office_Main_WithKey.jpg',
+    onEnter: {
+      first:  { EN: "Hmm. What could the key possibly open?",
+                JP: "この部屋の何かを開ける鍵なんだろうな。" },
+      repeat: { EN: "That door over there sure doesn't look suspicious at all. Yep!",
+                JP: "んー、そこにある扉が怪しいんだけどね。でも違うか。" }
+    },
+    hotspots: [
+      // ① Red — Door → open it (key is used here)
+      { id:'withkey_door',      x:398, y:218, w:224, h:330,
+        type:'red', action: ()=> goTo('R1_Office_Main_DoorOpened') },
+
+      // ② Red — Bookcase → back to opened-book state
+      { id:'withkey_bookcase',  x:28,  y:183, w:292, h:365,
+        type:'red', action: ()=> goTo('R1_Office_Bookcase_OpenedBook') },
+
+      // ── Inherited from R1_Office_Main ──
+      // ③ Blue — Left cubicle
+      { id:'withkey_cube_l',    x:28,  y:548, w:352, h:282,
+        type:'blue', text: { EN: "An empty cubicle. Where is everyone?",
+                              JP: "誰も座っていない。みんなどこいった？" }},
+
+      // ④ Blue — Right cubicle
+      { id:'withkey_cube_r',    x:620, y:548, w:380, h:282,
+        type:'blue', text: { EN: "The desk looks really clean. Was this guy really working?",
+                              JP: "本当に働いてたと思えないくらい、この人の机はきれいだ。" }},
+
+      // ⑤ Blue — Nameplate
+      { id:'withkey_nameplate', x:660, y:465, w:195, h:120,
+        type:'blue', text: { EN: 'The nameplate on the desk reads, "Stitch"',
+                              JP: "机に置かれた名札には、「スティッチ」と書かれている。" }},
+
+      // ⑥ Blue — Ceiling
+      { id:'withkey_ceiling',   x:0,   y:155, w:1024, h:60,
+        type:'blue', text: { EN: "Good to know they have electricity.",
+                              JP: "電気が通っているのは安心だな。" }}
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R1 – OFFICE MAIN  (door open — proceed to R2)
+  // ────────────────────────────────────────────────────────
+  R1_Office_Main_DoorOpened: {
+    image: 'R1_Office_Main_DoorOpened.jpg',
+    onEnter: {
+      first: { EN: "The key works and the door opens. You also hear a thump from behind you, but you ignore it.",
+               JP: "鍵を使って扉を開けた。その瞬間、真後ろで物音が聞こえたが、気にしなかった。" }
+      // No repeat text — this scene is one-way, player proceeds to R2
+    },
+    hotspots: [
+      // ① Red — Open door → proceed to R2
+      { id:'dooropen_door',      x:398, y:218, w:224, h:330,
+        type:'red', action: ()=> goTo('R2_Coffee_Main') },
+
+      // ② Blue — Bookcase (flavour)
+      { id:'dooropen_bookcase',  x:28,  y:218, w:292, h:287,
+        type:'blue', text: { EN: "Eh, I'd rather spend my time walking through that door than reading any of those books.",
+                              JP: "扉も開いたことだし、本でも読むかー。とは、ならないかな。" }},
+
+      // ── Inherited from R1_Office_Main ──
+      // ③ Blue — Left cubicle
+      { id:'dooropen_cube_l',    x:28,  y:548, w:352, h:282,
+        type:'blue', text: { EN: "An empty cubicle. Where is everyone?",
+                              JP: "誰も座っていない。みんなどこいった？" }},
+
+      // ④ Blue — Right cubicle
+      { id:'dooropen_cube_r',    x:620, y:548, w:380, h:282,
+        type:'blue', text: { EN: "The desk looks really clean. Was this guy really working?",
+                              JP: "本当に働いてたと思えないくらい、この人の机はきれいだ。" }},
+
+      // ⑤ Blue — Nameplate
+      { id:'dooropen_nameplate', x:660, y:465, w:195, h:120,
+        type:'blue', text: { EN: 'The nameplate on the desk reads, "Stitch"',
+                              JP: "机に置かれた名札には、「スティッチ」と書かれている。" }},
+
+      // ⑥ Blue — Ceiling
+      { id:'dooropen_ceiling',   x:0,   y:155, w:1024, h:60,
+        type:'blue', text: { EN: "Good to know they have electricity.",
+                              JP: "電気が通っているのは安心だな。" }}
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R2 – COFFEE BREAK ROOM  (main view)
+  // ────────────────────────────────────────────────────────
+  R2_Coffee_Main: {
+    image: 'R2_Coffee_Main.jpg',
+    onEnter: {
+      first:  { EN: "You enter what seems to be a coffee break room.",
+                JP: "休憩室と思われる部屋に辿り着いた。" },
+      repeat: { EN: "The smell of lukewarm leftover coffee fills the air.",
+                JP: "ぬるくなった飲みかけのコーヒーの香りが部屋中に漂っている。" }
+    },
+    hotspots: [
+      // ① Blue — left door (back to R1, but locked/no return)
+      { id:'r2main_backdoor',   x:28,  y:218, w:248, h:430,
+        type:'blue', text: { EN: "I don't think I need to go back in there.",
+                              JP: "あの部屋に戻る必要はなさそうだ。" }},
+
+      // ② Red — light switch → lights off
+      { id:'r2main_switch',     x:265, y:395, w:75,  h:85,
+        type:'red', action: ()=> goTo('R2_Coffee_LightsOff') },
+
+      // ③ Red — poster zoom
+      { id:'r2main_poster',     x:388, y:218, w:210, h:225,
+        type:'red', action: ()=> goTo('R2_Coffee_PosterZoom') },
+
+      // ④ Red — coffee machine table
+      { id:'r2main_machine',    x:338, y:450, w:322, h:175,
+        type:'red', action: ()=> goTo('R2_Coffee_MachineZoom') },
+
+      // ⑤ Blue — right door (locked, needs keypad)
+      { id:'r2main_exitdoor',   x:740, y:218, w:245, h:430,
+        type:'blue', text: { EN: "The door is locked. Seems the keypad next to it could unlock it.",
+                              JP: "扉はやはり開かない。隣に付いてるパネルを操作すれば開きそうだ。" }},
+
+      // ⑥ Red — keypad
+      { id:'r2main_keypad',     x:930, y:450, w:68,  h:112,
+        type:'red', action: ()=> goTo('R2_Coffee_KeyPad') }
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R2 – LIGHTS OFF
+  // ────────────────────────────────────────────────────────
+  R2_Coffee_LightsOff: {
+    image: 'R2_Coffee_LightsOff.jpg',
+    onEnter: {
+      first:  { EN: "You turn off the lights. I can't see anything!",
+                JP: "部屋の電気を消した。何も見えないよ！" },
+      repeat: { EN: "You turn it off again, because apparently saving electricity is more important than getting out.",
+                JP: "なぜか再び電気を消した。どうやら脱出より節電の方が大事のようだ。" }
+    },
+    hotspots: [
+      // ① Red — light switch → back to main (lights on)
+      { id:'r2dark_switch',     x:260, y:395, w:80,  h:85,
+        type:'red', action: ()=> goTo('R2_Coffee_Main') },
+
+      // ② Blue — glowing thing on carpet
+      { id:'r2dark_glow',       x:740, y:612, w:115, h:100,
+        type:'blue', text: { EN: "You see something glowing on top of the carpet in the corner of the room.",
+                              JP: "部屋の角に、何かカーペット上で光っているものが見える。" }}
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R2 – POSTER ZOOM
+  // ────────────────────────────────────────────────────────
+  R2_Coffee_PosterZoom: {
+    image: 'R2_Coffee_PosterZoom.jpg',
+    onEnter: {
+      first: { EN: "Ah, good old corporate propaganda.",
+               JP: "こういう企業プロパガンダのポスターよく見るよね。" }
+    },
+    hotspots: [
+      // ① Blue — main poster text
+      { id:'r2poster_main',     x:265, y:155, w:310, h:335,
+        type:'blue', text: { EN: 'You read the poster out loud. Hmm, not sure what it means.',
+                              JP: "「静かな従業員こそ、生産性の高い従業員である」と、声に出して読み上げた。" }},
+
+      // ② Blue — peeled corner with number
+      { id:'r2poster_peel',     x:500, y:490, w:195, h:175,
+        type:'blue', text: { EN: "A part of the poster seems to be pealed off, revealing some sort of number.",
+                              JP: "ポスターの角が剥がれており、数字のようなものが書かれている。" }},
+
+      // ③ Red — machine/table area → back to main
+      { id:'r2poster_back',     x:265, y:700, w:310, h:125,
+        type:'red', action: ()=> goTo('R2_Coffee_Main') }
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R2 – COFFEE MACHINE ZOOM
+  // ────────────────────────────────────────────────────────
+  R2_Coffee_MachineZoom: {
+    image: 'R2_Coffee_MachineZoom.jpg',
+    onEnter: {
+      first:  { EN: "You walk up to the coffee machine.",
+                JP: "コーヒーメーカーに近づいてみた。" },
+      repeat: { EN: "I could have really used a cup of coffee now.",
+                JP: "あー。コーヒー飲みたかったな。" }
+    },
+    hotspots: [
+      // ① Red — left cup → zoom into cup
+      { id:'r2machine_cup',     x:210, y:490, w:155, h:175,
+        type:'red', action: ()=> goTo('R2_Coffee_MachineZoom_CupZoom') },
+
+      // ② Blue — coffee machine itself
+      { id:'r2machine_main',    x:375, y:295, w:220, h:350,
+        type:'blue', text: { EN: "The machine is out of order. Maybe it joined the others in the 'Quiet Quitting' movement?",
+                              JP: "壊れてるみたいだ。社員に合わせてこいつも静かな退職をしたのかも。" }},
+
+      // ③ Blue — right cup with name
+      { id:'r2machine_cup2',    x:615, y:490, w:105, h:175,
+        type:'blue', text: { EN: 'The cup says it belongs to, "Banana". What a weird name.',
+                              JP: "コップの持ち主は、「バナナ」のようだ。なんて変な社員名だ。" }},
+
+      // ④ Blue — books (15px gap after right cup)
+      { id:'r2machine_books',   x:735, y:490, w:115, h:165,
+        type:'blue', text: { EN: "Books titled, 'How to avoid misplacing things'. Seems like they've been here for a while.",
+                              JP: "「物の置き忘れを防ぐ方法」という本だ。かなりの期間、ここに放置されているみたい。" }},
+
+      // ⑤ Red — table bottom strip → back to main
+      { id:'r2machine_back',    x:0,   y:710, w:1024, h:120,
+        type:'red', action: ()=> goTo('R2_Coffee_Main') }
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R2 – CUP ZOOM
+  // ────────────────────────────────────────────────────────
+  R2_Coffee_MachineZoom_CupZoom: {
+    image: 'R2_Coffee_MachineZoom_CupZoom.jpg',
+    onEnter: {
+      first: { EN: "You know, I never really understood people who leave a bit at the bottom.",
+               JP: "少しだけ飲み残す人の気持ちが理解できないな。" }
+    },
+    hotspots: [
+      // ① Blue — number written on bottom of mug
+      { id:'r2cup_number',      x:330, y:450, w:245, h:230,
+        type:'blue', text: { EN: "There seems to be a number written on the bottom of the mug. Interesting design.",
+                              JP: "コップの底には番号が書かれている。変わったデザインだな。" }},
+
+      // ② Red — bottom strip → back to machine zoom
+      { id:'r2cup_back',        x:0,   y:720, w:1024, h:105,
+        type:'red', action: ()=> goTo('R2_Coffee_MachineZoom') }
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R2 – KEYPAD
+  // ────────────────────────────────────────────────────────
+  R2_Coffee_KeyPad: {
+    image: 'R2_Coffee_KeyPad.jpg',
+    onEnter: {
+      first: { EN: "You walk up to the key pad.",
+               JP: "操作パネルに近づいてみた。" }
+    },
+    hotspots: [
+      // ① Blue — display screen
+      { id:'r2kp_display',   x:340, y:185, w:345, h:115,
+        type:'blue', text: { EN: "Seems I need to input a 3 digit code.",
+                              JP: "3桁の数字を入力する必要があるみたいだ。" }},
+
+      // ② Red — bottom strip → back to main (also resets keypad)
+      { id:'r2kp_back',      x:0,   y:795, w:1024, h:55,
+        type:'red', action: ()=> { state.keypadInput = []; goTo('R2_Coffee_Main'); } },
+
+      // Number buttons 1–9 (3×3 grid on the keypad image)
+      // Col positions: left ~358, mid ~455, right ~555 — each ~90px wide
+      // Row positions: row1 ~370, row2 ~480, row3 ~590 — each ~95px tall
+      { id:'r2kp_1', x:358, y:370, w:90, h:95, type:'keypad', digit:'1' },
+      { id:'r2kp_2', x:455, y:370, w:90, h:95, type:'keypad', digit:'2' },
+      { id:'r2kp_3', x:555, y:370, w:90, h:95, type:'keypad', digit:'3' },
+      { id:'r2kp_4', x:358, y:480, w:90, h:95, type:'keypad', digit:'4' },
+      { id:'r2kp_5', x:455, y:480, w:90, h:95, type:'keypad', digit:'5' },
+      { id:'r2kp_6', x:555, y:480, w:90, h:95, type:'keypad', digit:'6' },
+      { id:'r2kp_7', x:358, y:590, w:90, h:95, type:'keypad', digit:'7' },
+      { id:'r2kp_8', x:455, y:590, w:90, h:95, type:'keypad', digit:'8' },
+      { id:'r2kp_9', x:555, y:590, w:90, h:95, type:'keypad', digit:'9' }
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R2 – DOOR OPEN  (code correct → proceed to R3)
+  // ────────────────────────────────────────────────────────
+  R2_Coffee_Main_DoorOpen: {
+    image: 'R2_Coffee_Main_DoorOpen.jpg',
+    onEnter: {
+      first: { EN: "Seems the code was correct! The door opens.",
+               JP: "正しいコードを入力できたようだ。扉が開いた。" }
+    },
+    hotspots: [
+      // ① Red — open door → proceed to R3
+      { id:'r2open_door',    x:740, y:218, w:245, h:430,
+        type:'red', action: ()=> goTo('R3_Elevator_MainFront') },
+
+      // ② Blue — left side flavour
+      { id:'r2open_left',    x:28,  y:218, w:710, h:430,
+        type:'blue', text: { EN: "Hmm. Something about this place is familiar. I should move along.",
+                              JP: "なんかこの場所見覚えあるんだよな。とりあえず次の部屋に進もう。" }}
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R3 – ELEVATOR FRONT
+  // ────────────────────────────────────────────────────────
+  R3_Elevator_MainFront: {
+    image: 'R3_Elevator_MainFront.jpg',
+    usesInventoryOverlay: true,
+    onEnter: {
+      first:  { EN: "You arrive at what seems to be an elevator hall.",
+                JP: "エレベーターホールにたどり着いた。" },
+      repeat: { EN: "I wonder how I can get those elevator doors to open.",
+                JP: "どうやったら、あのエレベーターが開いてくれるのかな。" }
+    },
+    hotspots: [
+      // #1 Purple — lever panel (conditional on all items)
+      { id:'r3front_panel',  x:258, y:490, w:110, h:110,
+        type:'red', action: ()=> {
+          if (state.r3items.item1 && state.r3items.item2 && state.r3items.item3) {
+            state.r3items = { item1: false, item2: false, item3: false };
+            goTo('R3_Elevator_MainFront_LeverAttached');
+          } else {
+            const t = { EN: "Seems like I could try to attach something to that panel.",
+                        JP: "あのパネル、何か付けられそうだな。" };
+            setDialog(t[state.lang], t);
+          }
+        }},
+      // #2 Blue — elevator doors
+      { id:'r3front_doors',  x:370, y:240, w:265, h:440,
+        type:'blue', text: { EN: "That elevator is my ticket out of here, if I can get it to open that is.",
+                              JP: "あのエレベーターにさえ乗れれば、ここから脱出できるはずだ。どうやって開くのだろうか。" }},
+      // #3 Red — locker (conditional on item2get)
+      { id:'r3front_locker', x:710, y:265, w:200, h:420,
+        type:'red', action: ()=> {
+          goTo(state.r3items.item2 ? 'R3_Elevator_MainFront_Locker_Item2get' : 'R3_Elevator_MainFront_Locker');
+        }},
+      // #4 Red — floor strip → go to MainBack
+      { id:'r3front_toback', x:0,   y:762, w:1024, h:70,
+        type:'red', action: ()=> goTo('R3_Elevator_MainBack') }
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R3 – LOCKER (item not yet picked up)
+  // ────────────────────────────────────────────────────────
+  R3_Elevator_MainFront_Locker: {
+    image: 'R3_Elevator_MainFront_Locker.jpg',
+    usesInventoryOverlay: true,
+    onEnter: {
+      first:  { EN: "Seems to be some storage locker for cleaning supplies.",
+                JP: "掃除道具のためのロッカーのようだ。" },
+      repeat: { EN: "Its suprisingly concerning how little of supplies are in here.",
+                JP: "掃除道具の少なさには驚きだな。" }
+    },
+    hotspots: [
+      // #1 Blue — spray bottles
+      { id:'r3locker_bottles', x:80,  y:355, w:570, h:105,
+        type:'blue', text: { EN: "All the bottles are the same, 'Polo Stain Eraser' spray bottles.",
+                              JP: "並んでいるのは全て同じ、「Polo 汚れ消し」のスプレーボトルのようだ。" }},
+      // #2 Red — left interior → back to MainFront
+      { id:'r3locker_back1',   x:28,  y:620, w:200, h:230,
+        type:'red', action: ()=> goTo('R3_Elevator_MainFront') },
+      // #3 Red — item on locker floor → pick up item2
+      { id:'r3locker_item',    x:390, y:690, w:175, h:150,
+        type:'red', action: ()=> { state.r3items.item2 = true; goTo('R3_Elevator_MainFront_Locker_Item2get'); }},
+      // #4 Red — locker door → back to MainFront
+      { id:'r3locker_door',    x:720, y:185, w:220, h:680,
+        type:'red', action: ()=> goTo('R3_Elevator_MainFront') }
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R3 – LOCKER (item already picked up)
+  // ────────────────────────────────────────────────────────
+  R3_Elevator_MainFront_Locker_Item2get: {
+    image: 'R3_Elevator_MainFront_Locker_Item2get.jpg',
+    usesInventoryOverlay: true,
+    onEnter: {
+      first:  { EN: "You pick up the metal piece in the locker.",
+                JP: "ロッカーに置かれていた金属の部品を拾った。" },
+      repeat: { EN: "You open the locker again.",
+                JP: "再びロッカーを開けてみた。" }
+    },
+    hotspots: [
+      // Inherited #1 Blue — spray bottles
+      { id:'r3locker2_bottles', x:80,  y:355, w:570, h:105,
+        type:'blue', text: { EN: "All the bottles are the same, 'Polo Stain Eraser' spray bottles.",
+                              JP: "並んでいるのは全て同じ、「Polo 汚れ消し」のスプレーボトルのようだ。" }},
+      // Inherited #2 Red — back to MainFront
+      { id:'r3locker2_back1',   x:28,  y:620, w:200, h:230,
+        type:'red', action: ()=> goTo('R3_Elevator_MainFront') },
+      // Inherited #4 Red — locker door → back
+      { id:'r3locker2_door',    x:720, y:185, w:220, h:680,
+        type:'red', action: ()=> goTo('R3_Elevator_MainFront') }
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R3 – ELEVATOR BACK
+  // ────────────────────────────────────────────────────────
+  R3_Elevator_MainBack: {
+    image: 'R3_Elevator_MainBack.jpg',
+    usesInventoryOverlay: true,
+    onEnter: {
+      first:  { EN: "You look towards the back of the room.",
+                JP: "振り返って部屋の反対側を見てみた。" },
+      repeat: { EN: "Hmm, what a strange layout for an office.",
+                JP: "うーん、なんか変なオフィスのレイアウトだよな。" }
+    },
+    hotspots: [
+      // #1 Blue — door back to coffee room
+      { id:'r3back_door',    x:28,  y:218, w:248, h:430,
+        type:'blue', text: { EN: "Unless you like your espresso lukewarm, I wouldn't go back in there.",
+                              JP: "戻る必要はないかな。冷めきったコーヒーが好きなら話は別だが。" }},
+      // #2 Blue — documents on desk
+      { id:'r3back_docs',    x:355, y:450, w:300, h:125,
+        type:'blue', text: { EN: "Documents about someone's struggles of using AI to make games. The words are filled to the brim.",
+                              JP: "AIを使ったゲーム作成の苦労が書かれた文書が並んでいる。作者は不明だが、言葉でぎっしりだ。" }},
+      // #3 Blue — plant leaves
+      { id:'r3back_leaves',  x:680, y:350, w:245, h:195,
+        type:'blue', text: { EN: "Oh look! Life! Wait.. no. It's plastic. False alarm.",
+                              JP: "お！やっと生命に出会えた！いや、待てよ。プラスチック製じゃないか。" }},
+      // #4 Red — drawer (conditional on item1get)
+      { id:'r3back_drawer',  x:355, y:575, w:300, h:115,
+        type:'red', action: ()=> {
+          goTo(state.r3items.item1 ? 'R3_Elevator_MainBack_Drawer_Item1get' : 'R3_Elevator_MainBack_Drawer');
+        }},
+      // #5 Red — plant pot (conditional on item3get)
+      { id:'r3back_plant',   x:680, y:545, w:245, h:205,
+        type:'red', action: ()=> {
+          goTo(state.r3items.item3 ? 'R3_Elevator_MainBack_Plant_Item3get' : 'R3_Elevator_MainBack_Plant');
+        }},
+      // #6 Red — floor strip → back to MainFront
+      { id:'r3back_tofront', x:0,   y:762, w:1024, h:70,
+        type:'red', action: ()=> goTo('R3_Elevator_MainFront') }
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R3 – DRAWER (item not yet picked up)
+  // ────────────────────────────────────────────────────────
+  R3_Elevator_MainBack_Drawer: {
+    image: 'R3_Elevator_MainBack_Drawer.jpg',
+    usesInventoryOverlay: true,
+    onEnter: {
+      first: { EN: "You open the drawer.", JP: "引き出しを開けた。" }
+    },
+    hotspots: [
+      // #1 Blue — pens
+      { id:'r3drawer_pens', x:175, y:295, w:280, h:290,
+        type:'blue', text: { EN: "All of them are the same, 'Polo Draw & Erase' ink pens.",
+                              JP: "並んでいるのは全て同じ、「Polo 書いて消して」シリーズのボールペンのようだ。" }},
+      // #2 Red — pick up item1
+      { id:'r3drawer_item', x:570, y:345, w:195, h:200,
+        type:'red', action: ()=> { state.r3items.item1 = true; goTo('R3_Elevator_MainBack_Drawer_Item1get'); }},
+      // #3 Red — floor strip → back to MainBack
+      { id:'r3drawer_back', x:0,   y:720, w:1024, h:100,
+        type:'red', action: ()=> goTo('R3_Elevator_MainBack') }
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R3 – DRAWER (item already picked up)
+  // ────────────────────────────────────────────────────────
+  R3_Elevator_MainBack_Drawer_Item1get: {
+    image: 'R3_Elevator_MainBack_Drawer_Item1get.jpg',
+    usesInventoryOverlay: true,
+    onEnter: {
+      first:  { EN: "You pick up the strange metal piece.", JP: "謎の金属パーツを拾った。" },
+      repeat: { EN: "You open the drawer.",                 JP: "引き出しを開けた。" }
+    },
+    hotspots: [
+      // Inherited #1 Blue — pens
+      { id:'r3drawer2_pens', x:175, y:295, w:280, h:290,
+        type:'blue', text: { EN: "All of them are the same, 'Polo Draw & Erase' ink pens.",
+                              JP: "並んでいるのは全て同じ、「Polo 書いて消して」シリーズのボールペンのようだ。" }},
+      // Inherited #3 Red — floor strip → back
+      { id:'r3drawer2_back', x:0,   y:720, w:1024, h:100,
+        type:'red', action: ()=> goTo('R3_Elevator_MainBack') }
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R3 – PLANT (item not yet picked up)
+  // ────────────────────────────────────────────────────────
+  R3_Elevator_MainBack_Plant: {
+    image: 'R3_Elevator_MainBack_Plant.jpg',
+    usesInventoryOverlay: true,
+    onEnter: {
+      first: { EN: "You look inside the plant pot.", JP: "鉢の中を覗いてみた。" }
+    },
+    hotspots: [
+      // #1 Red — pick up item3
+      { id:'r3plant_item', x:400, y:400, w:215, h:215,
+        type:'red', action: ()=> { state.r3items.item3 = true; goTo('R3_Elevator_MainBack_Plant_Item3get'); }},
+      // #2 Red — floor → back to MainBack
+      { id:'r3plant_back', x:0,   y:750, w:1024, h:80,
+        type:'red', action: ()=> goTo('R3_Elevator_MainBack') }
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R3 – PLANT (item already picked up)
+  // ────────────────────────────────────────────────────────
+  R3_Elevator_MainBack_Plant_Item3get: {
+    image: 'R3_Elevator_MainBack_Plant_Item3get.jpg',
+    usesInventoryOverlay: true,
+    onEnter: {
+      first:  { EN: "You dig up a strange red object from the soil.", JP: "土に埋まっていた赤色の物体を回収した。" },
+      repeat: { EN: "You look inside the plant pot.",                 JP: "鉢の中を覗いてみた。" }
+    },
+    hotspots: [
+      // Inherited #2 Red — floor → back to MainBack
+      { id:'r3plant2_back', x:0, y:750, w:1024, h:80,
+        type:'red', action: ()=> goTo('R3_Elevator_MainBack') }
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R3 – LEVER ATTACHED
+  // ────────────────────────────────────────────────────────
+  R3_Elevator_MainFront_LeverAttached: {
+    image: 'R3_Elevator_MainFront_LeverAttached.jpg',
+    onEnter: {
+      first: { EN: "You succesfully combine all three parts and attach the lever.",
+               JP: "見事に三つの部品を組み合わせ、レバーの取り付けに成功した。" }
+    },
+    hotspots: [
+      // #1 Red — pull lever → door opens
+      { id:'r3lev_pull',  x:258, y:455, w:115, h:125,
+        type:'red', action: ()=> goTo('R3_Elevator_MainFront_LeverAttached_DoorOpen') },
+      // #2 Blue — elevator doors
+      { id:'r3lev_doors', x:375, y:195, w:340, h:475,
+        type:'blue', text: { EN: "I should probably pull that lever and get out of here.",
+                              JP: "はやくレバーを引いてここから脱出した方が良さそうだ。" }},
+      // #3 Blue — floor/back area
+      { id:'r3lev_back',  x:0,   y:745, w:1024, h:85,
+        type:'blue', text: { EN: "No point in going back now. Let's get on that elevator.",
+                              JP: "戻る必要はなさそうだ。エレベーターに乗ろう。" }}
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  R3 – ELEVATOR DOOR OPEN
+  // ────────────────────────────────────────────────────────
+  R3_Elevator_MainFront_LeverAttached_DoorOpen: {
+    image: 'R3_Elevator_MainFront_LeverAttached_DoorOpen.jpg',
+    onEnter: {
+      first: { EN: "As you pull the lever, the elevator doors slide open.",
+               JP: "レバーを引くと、目の前のエレベーターのドアが開いた。" }
+    },
+    hotspots: [
+      // #1 Red — enter elevator
+      { id:'r3dooropen_enter', x:375, y:260, w:260, h:475,
+        type:'red', action: ()=> goTo('Ending_InsideElevator') },
+      // #2 Blue — "Polo" company panel on right wall
+      { id:'r3dooropen_logo',  x:800, y:440, w:130, h:145,
+        type:'blue', text: { EN: 'I guess the company name is "Polo"? What a weird name.',
+                              JP: "会社名は「Polo」ってことなのかな。なんて変な会社名だ。" }}
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  ENDING – INSIDE ELEVATOR  (auto-advances after 10s)
+  // ────────────────────────────────────────────────────────
+  Ending_InsideElevator: {
+    image: 'Ending_InsideElevator.jpg',
+    onEnter: {
+      first: { EN: "You get inside the elevator. The doors close, and it starts moving.",
+               JP: "中に入ると目の前でドアが閉まった。動き出したようだ。" }
+    },
+    onEnterCallback: ()=> {
+      scheduleTimer(()=> {
+        fadeToScene('Ending_TheEnd');
+      }, 10000);
+    },
+    hotspots: [
+      // #1 Blue — floor indicator
+      { id:'end1_floor',  x:395, y:185, w:215, h:75,
+        type:'blue', text: { EN: "Wait, the elevator is going up?",
+                              JP: "あれ、このエレベーター上に向かってるぞ。" }},
+      // #2 Blue — reflection in doors
+      { id:'end1_reflect', x:395, y:295, w:215, h:455,
+        type:'blue', text: { EN: "Is that me in the reflection? Hey, nice suit!",
+                              JP: "そこに映ってるのは私か？いいスーツだな！" }},
+      // #3 Blue — elevator panel
+      { id:'end1_panel',   x:800, y:470, w:130, h:120,
+        type:'blue', text: { EN: "The buttons aren't working at all.",
+                              JP: "ボタンを押しても反応がないようだ。" }}
+    ]
+  },
+
+  // ────────────────────────────────────────────────────────
+  //  ENDING – THE END  (auto-sequence then reset)
+  // ────────────────────────────────────────────────────────
+  Ending_TheEnd: {
+    image: 'Ending_TheEnd.jpg',
+    onEnter: {
+      first: { EN: "The elevator stops and opens. You see someone walking towards the door.",
+               JP: "エレベーターは止まり、ドアが開いた。部屋の扉に向かって歩く人物が見える。" }
+    },
+    onEnterCallback: ()=> {
+      const t2 = { EN: "Huh? Wait...No. Is that me?! How? Ow... my head. I'm going to faint...",
+                   JP: "え？待って。そこにいるのは私か？！なぜ？え、頭が痛い、、だめだ。倒れる。。" };
+      scheduleTimer(()=> {
+        setDialog(t2[state.lang], t2);
+        scheduleTimer(()=> {
+          // Fade to white then reset
+          const overlay = document.getElementById('fade-overlay');
+          overlay.classList.add('fade-in');
+          scheduleTimer(()=> {
+            const savedLang = state.lang;
+            resetGame();
+            state.lang = savedLang;
+            document.getElementById('btn-en').classList.toggle('active', savedLang === 'EN');
+            document.getElementById('btn-jp').classList.toggle('active', savedLang === 'JP');
+            scheduleTimer(()=> { overlay.classList.remove('fade-in'); }, 800);
+          }, 5200);
+        }, 7000);
+      }, 7000);
+    },
+    hotspots: []
+  }
+
+}; // end scenes
+
+function toggleDebug() {
+  document.getElementById('game-container').classList.toggle('debug-on');
+}
+
+// ============================================================
+//  LANGUAGE SWITCHER
+// ============================================================
+function setLang(lang) {
+  state.lang = lang;
+  document.getElementById('btn-en').classList.toggle('active', lang === 'EN');
+  document.getElementById('btn-jp').classList.toggle('active', lang === 'JP');
+  // Re-render whatever dialog was currently showing, in the new language
+  if (state.currentDialogKey) {
+    setDialog(state.currentDialogKey[lang] || state.currentDialogKey.EN);
+  }
+}
+
+// ============================================================
+//  DIALOG
+// ============================================================
+function setDialog(text, textObj) {
+  state.currentDialogKey = textObj || null;
+  document.getElementById('dialog-text').textContent = text || '';
+}
+
+// ============================================================
+//  SCENE NAVIGATION
+// ============================================================
+function goTo(sceneName) {
+  const scene = scenes[sceneName];
+  if (!scene) {
+    console.warn('[EscapeRoom] Scene not defined:', sceneName);
+    return;
+  }
+
+  clearAllTimers();
+
+  const isFirst  = !state.visited[sceneName];
+  state.currentScene = sceneName;
+  state.visited[sceneName] = (state.visited[sceneName] || 0) + 1;
+
+  // ── Swap image ──
+  document.getElementById('scene-image').src = scene.image;
+  state.currentDialogKey = null;
+
+  // ── Run one-time callbacks (e.g., give item, start timer) ──
+  if (isFirst && scene.onEnterCallback) {
+    scene.onEnterCallback();
+  } else if (!isFirst && scene.onEnterCallback) {
+    // repeat visit — still run for ending sequences (timers cleared above so safe to re-run)
+    // but only for ending scenes that need it every visit
+    if (sceneName === 'Ending_TheEnd' || sceneName === 'Ending_InsideElevator') {
+      scene.onEnterCallback();
+    }
+  }
+
+  // ── Set dialog text ──
+  if (scene.onEnter) {
+    const entry = isFirst
+      ? scene.onEnter.first
+      : (scene.onEnter.repeat || scene.onEnter.first);
+    setDialog(entry ? (entry[state.lang] || entry.EN) : '', entry || null);
+  } else {
+    setDialog('');
+  }
+
+  // ── Render hotspots ──
+  renderHotspots(scene.hotspots);
+
+  // ── Render inventory overlays (R3 scenes) ──
+  renderInventoryOverlay();
+}
+
+// ============================================================
+//  HOTSPOT RENDERING
+// ============================================================
+function renderHotspots(hotspots) {
+  const container = document.getElementById('hotspot-container');
+  container.innerHTML = '';
+
+  (hotspots || []).forEach(hs => {
+    const div = document.createElement('div');
+    div.className = 'hotspot';
+    div.dataset.type = hs.type;
+    div.style.left   = hs.x + 'px';
+    div.style.top    = hs.y + 'px';
+    div.style.width  = hs.w + 'px';
+    div.style.height = hs.h + 'px';
+
+    // ── Uncomment to visualise hotspots during testing ──
+    // div.style.background = hs.type === 'red'
+    //   ? 'rgba(255,60,60,0.25)' : 'rgba(60,100,255,0.25)';
+    // div.style.border = `2px solid ${hs.type === 'red' ? '#f33' : '#44f'}`;
+
+    div.addEventListener('click', () => {
+      if (hs.type === 'red' && hs.action) {
+        hs.action();
+      } else if (hs.type === 'blue' && hs.text) {
+        setDialog(hs.text[state.lang] || hs.text.EN, hs.text);
+      } else if (hs.type === 'keypad' && hs.digit) {
+        handleKeypadDigit(hs.digit);
+      }
+    });
+
+    container.appendChild(div);
+  });
+}
+
+// ============================================================
+//  KEYPAD LOGIC  (R2 Coffee Room)
+// ============================================================
+function handleKeypadDigit(digit) {
+  state.keypadInput.push(digit);
+
+  // Show "You pressed X" dialog
+  const pressedText = {
+    EN: `You pressed ${digit}.`,
+    JP: `${digit}のボタンを押した。`
+  };
+  setDialog(pressedText[state.lang], pressedText);
+
+  // Wait until 3 digits entered
+  if (state.keypadInput.length < 3) return;
+
+  const combo = state.keypadInput.join('');
+  state.keypadInput = []; // reset regardless of outcome
+
+  // Small delay so player sees the 3rd digit message before result
+  setTimeout(() => {
+    if (combo === '365') {
+      // ── SUCCESS ──
+      goTo('R2_Coffee_Main_DoorOpen');
+    } else if (combo === '123') {
+      // ── UNIQUE FAIL ──
+      const msg = {
+        EN: "Despite your confidence in their incompetence, you're left disappointed that it wasn't just, '123'.",
+        JP: "セキュリティ意識の低さを確信していたが、単純に「123」ではないみたいだ。"
+      };
+      setDialog(msg[state.lang], msg);
+    } else {
+      // ── GENERIC FAIL ──
+      const msg = {
+        EN: "A loud buzzer echoes through the room. The code was incorrect.",
+        JP: "部屋中に大きなブザー音が鳴り響く。間違っていたようだ。"
+      };
+      setDialog(msg[state.lang], msg);
+    }
+  }, 300);
+}
+
+// ============================================================
+//  PENDING TIMER MANAGEMENT
+//  Clears any scheduled ending-sequence timers on scene change
+// ============================================================
+const pendingTimers = [];
+
+function scheduleTimer(fn, delay) {
+  const id = setTimeout(fn, delay);
+  pendingTimers.push(id);
+  return id;
+}
+
+function clearAllTimers() {
+  while (pendingTimers.length) clearTimeout(pendingTimers.pop());
+}
+
+// ============================================================
+//  INVENTORY OVERLAY RENDERER
+//  Displays acquired lever parts over their designated slots
+//  Slot positions (1024×1024 canvas):
+//    Slot 1 (left)  : x=285, y=902, w=128, h=88
+//    Slot 2 (mid)   : x=437, y=902, w=128, h=88
+//    Slot 3 (right) : x=590, y=902, w=128, h=88
+// ============================================================
+const INV_SLOTS = [
+  { key:'item1', file:'Item1_Lever_Base.jpg',   x:308, y:902, w:128, h:88,
+    text: { EN: "Seems to be the base part of something.",
+            JP: "何かの土台部分のようだ。" }},
+  { key:'item2', file:'Item2_Lever_Shaft.jpg',  x:451, y:902, w:128, h:88,
+    text: { EN: "Seems to be the shaft part of some mechanism?",
+            JP: "この棒は何かのパーツみたいだ。" }},
+  { key:'item3', file:'Item3_Lever_Handle.jpg', x:596, y:902, w:128, h:88,
+    text: { EN: "Seems to be the handle part of something.",
+            JP: "何かの取っ手部分のようだ。" }}
+];
+
+function renderInventoryOverlay() {
+  const container = document.getElementById('inventory-overlay');
+  container.innerHTML = '';
+
+  const scene = scenes[state.currentScene];
+  if (!scene || !scene.usesInventoryOverlay) return;
+
+  INV_SLOTS.forEach(slot => {
+    if (!state.r3items[slot.key]) return;
+
+    const img = document.createElement('img');
+    img.src     = slot.file;
+    img.className = 'inv-item';
+    img.style.left   = slot.x + 'px';
+    img.style.top    = slot.y + 'px';
+    img.style.width  = slot.w + 'px';
+    img.style.height = slot.h + 'px';
+
+    img.addEventListener('click', ()=> {
+      setDialog(slot.text[state.lang] || slot.text.EN, slot.text);
+    });
+
+    container.appendChild(img);
+  });
+}
+
+// ============================================================
+//  GAME RESET
+// ============================================================
+function resetGame() {
+  state.currentScene     = null;
+  state.visited          = {};
+  state.hasKey           = false;
+  state.r3items          = { item1: false, item2: false, item3: false };
+  state.currentDialogKey = null;
+  state.keypadInput      = [];
+  document.getElementById('inventory-overlay').innerHTML = '';
+  goTo('R1_Office_Main');
+  preloadImages();
+}
+
+// ============================================================
+//  FADE TO SCENE  (used for ending InsideElevator → TheEnd)
+// ============================================================
+function fadeToScene(sceneName) {
+  const overlay = document.getElementById('fade-overlay');
+  overlay.classList.add('fade-in');
+  scheduleTimer(()=> {
+    goTo(sceneName);
+    scheduleTimer(()=> { overlay.classList.remove('fade-in'); }, 400);
+  }, 1500);
+}
+
+// ============================================================
+//  IMAGE PRELOADER
+//  Silently downloads all game images on page load
+// ============================================================
+function preloadImages() {
+  const imageFiles = [
+    'R1_Office_Main.jpg',
+    'R1_Office_Bookcase_ClosedBook.jpg',
+    'R1_Office_Bookcase_OpenedBook.jpg',
+    'R1_Office_Main_WithKey.jpg',
+    'R1_Office_Main_DoorOpened.jpg',
+    'R2_Coffee_Main.jpg',
+    'R2_Coffee_LightsOff.jpg',
+    'R2_Coffee_PosterZoom.jpg',
+    'R2_Coffee_MachineZoom.jpg',
+    'R2_Coffee_MachineZoom_CupZoom.jpg',
+    'R2_Coffee_KeyPad.jpg',
+    'R2_Coffee_Main_DoorOpen.jpg',
+    'R3_Elevator_MainFront.jpg',
+    'R3_Elevator_MainFront_Locker.jpg',
+    'R3_Elevator_MainFront_Locker_Item2get.jpg',
+    'R3_Elevator_MainBack.jpg',
+    'R3_Elevator_MainBack_Drawer.jpg',
+    'R3_Elevator_MainBack_Drawer_Item1get.jpg',
+    'R3_Elevator_MainBack_Plant.jpg',
+    'R3_Elevator_MainBack_Plant_Item3get.jpg',
+    'R3_Elevator_MainFront_LeverAttached.jpg',
+    'R3_Elevator_MainFront_LeverAttached_DoorOpen.jpg',
+    'Ending_InsideElevator.jpg',
+    'Ending_TheEnd.jpg',
+    'Item1_Lever_Base.jpg.PNG',
+    'Item2_Lever_Shaft.jpg.PNG',
+    'Item3_Lever_Handle.jpg.PNG'
+  ];
+
+  imageFiles.forEach(src => {
+    const img = new Image();
+    img.src = src;
+  });
+}
+
+// ============================================================
+//  RESPONSIVE SCALING
+//  Scales the 1024×1024 game to fit any viewport
+// ============================================================
+function scaleGame() {
+  const wrapper = document.getElementById('game-wrapper');
+  const scale   = Math.min(window.innerWidth / 1024, window.innerHeight / 1024);
+  const offX    = (window.innerWidth  - 1024 * scale) / 2;
+  const offY    = (window.innerHeight - 1024 * scale) / 2;
+  wrapper.style.transform = `scale(${scale})`;
+  wrapper.style.left      = offX + 'px';
+  wrapper.style.top       = offY + 'px';
+}
+
+// ============================================================
+//  INIT
+// ============================================================
+window.addEventListener('load',   () => { scaleGame(); goTo('R1_Office_Main'); });
+window.addEventListener('resize', scaleGame);
+</script>
+
+</body>
+</html>
